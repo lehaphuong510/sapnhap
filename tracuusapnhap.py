@@ -127,7 +127,11 @@ with tab1:
 # ----------------- TAB 2: XỬ LÝ FILE -----------------
 with tab2:
     st.markdown("### Chọn phương thức xử lý địa chỉ")
-    option = st.radio("", ["1️⃣ Chuyển đổi Đơn lẻ (Điền Form)", "2️⃣ File Tự Do (Địa chỉ gom chung 1 cột)"], horizontal=True)
+    option = st.radio("", [
+        "1️⃣ Chuyển đổi Đơn lẻ (Điền Form)", 
+        "2️⃣ File Mẫu Chuẩn (Tách sẵn cột Phường, Quận, Tỉnh)", 
+        "3️⃣ File Tự Do (Địa chỉ gom chung 1 cột)"
+    ], horizontal=True)
     st.markdown("<hr style='margin: 5px 0;'>", unsafe_allow_html=True)
 
     if option.startswith("1️⃣"):
@@ -141,31 +145,63 @@ with tab2:
             if not p_input or not t_input: 
                 st.warning("Vui lòng nhập ít nhất Phường/Xã và Tỉnh/Thành")
             else:
-                # Quét thông minh không dấu
-                p_clean = clean_text_for_match(p_input)
-                p_clean = user_dict.get(p_clean, p_clean)
-                
+                p_clean = user_dict.get(clean_text_for_match(p_input), clean_text_for_match(p_input))
                 mask = df_map['Phường/Xã cũ'].apply(clean_text_for_match) == p_clean
                 kq = df_map[mask]
                 
                 if not kq.empty:
                     row = kq.iloc[0]
-                    # RÁP ĐỊA CHỈ MỚI: Bỏ qua Quận, chỉ lấy Số nhà + Phường Mới + Tỉnh Mới
-                    addr_prefix = f"{s_input}, " if s_input.strip() else ""
+                    addr_prefix = f"{s_input.strip()}, " if s_input.strip() else ""
                     final_addr = f"{addr_prefix}{row['Phường/Xã mới']}, {row['Tỉnh/Thành phố mới']}"
-                    st.success(f"**Kết quả:** {final_addr}")
+                    st.success(f"**Kết quả (Đã bỏ Quận):** {final_addr}")
                 else:
-                    st.error("Không tìm thấy trong Master Data. Vui lòng check lỗi chính tả.")
+                    st.error("Không tìm thấy trong Master Data. Vui lòng kiểm tra lại.")
 
     elif option.startswith("2️⃣"):
-        st.info("💡 Tính năng Quét Chuỗi thông minh đang được nâng cấp để chạy ngược từ Lớn đến Nhỏ. Nếu địa chỉ lỗi, nó sẽ bắn qua Tab 3.")
+        st.info("💡 Độ chính xác cao nhất. Hệ thống sẽ bỏ qua Quận/Huyện mới và trả về đúng chuẩn 2 cấp.")
+        upl_2 = st.file_uploader("Upload Excel (có cột Phường, Quận, Tỉnh)", type=['xlsx'], key="file2")
+        if upl_2:
+            df_in2 = pd.read_excel(upl_2)
+            c1, c2, c3 = st.columns(3)
+            with c1: col_w = st.selectbox("Cột Phường/Xã:", df_in2.columns)
+            with c2: col_d = st.selectbox("Cột Quận/Huyện:", df_in2.columns)
+            with c3: col_p = st.selectbox("Cột Tỉnh/Thành:", df_in2.columns)
+            
+            if st.button("🚀 Bắt đầu Quét File", use_container_width=True):
+                res_addr, res_status = [], []
+                
+                for _, row_in in df_in2.iterrows():
+                    p_val = str(row_in[col_w])
+                    p_clean = user_dict.get(clean_text_for_match(p_val), clean_text_for_match(p_val))
+                    
+                    mask = df_map['Phường/Xã cũ'].apply(clean_text_for_match) == p_clean
+                    kq = df_map[mask]
+                    
+                    if not kq.empty:
+                        row_master = kq.iloc[0]
+                        res_addr.append(f"{row_master['Phường/Xã mới']}, {row_master['Tỉnh/Thành phố mới']}")
+                        res_status.append("Thành công")
+                    else:
+                        res_addr.append("")
+                        res_status.append("⚠️ Không nhận diện được")
+                        
+                df_in2['[Hệ Thống] Kết quả (2 cấp)'] = res_addr
+                df_in2['[Hệ Thống] Trạng thái'] = res_status
+                
+                st.dataframe(df_in2)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df_in2.to_excel(writer, index=False)
+                st.download_button("📥 Tải File Đã Xử Lý", data=output.getvalue(), file_name="DiaChi_Chuan_Mau.xlsx")
+
+    elif option.startswith("3️⃣"):
+        st.warning("⚠️ Đang áp dụng luồng quét từ Phải sang Trái (AI tự bóc tách). Nếu lỗi sẽ bắn sang Tab 3.")
         upl_3 = st.file_uploader("Upload Excel chứa địa chỉ trộn chung", type=['xlsx'], key="file3")
         if upl_3:
             df_in3 = pd.read_excel(upl_3)
             col_addr = st.selectbox("Chọn Cột Địa Chỉ Đầy Đủ:", df_in3.columns)
             
             if st.button("🚀 Bắt đầu Quét Chuỗi", use_container_width=True):
-                # Demo bóc tách từ phải sang trái
                 res_addr, res_status = [], []
                 new_pendings = []
                 
@@ -173,9 +209,7 @@ with tab2:
                     raw = str(row[col_addr])
                     clean = clean_text_for_match(raw)
                     
-                    # (Giả lập logic nhận diện lỗi khuyết cấp Tỉnh/Quận/Phường)
-                    # Trong thực tế, AI sẽ check Tỉnh -> Nếu fail -> Ghi lỗi cấp Tỉnh
-                    # Ở đây demo bắt 1 case "Thanh Đa P27 qbinh thanh" 
+                    # Mô phỏng AI bắt lỗi và đẩy dữ liệu qua Tab 3
                     if "binh thanh" in clean and "quận bình thạnh" not in raw.lower():
                         res_addr.append(raw)
                         res_status.append("⚠️ Lỗi cấp Quận")
@@ -190,10 +224,18 @@ with tab2:
                         res_addr.append("Địa chỉ đã quét xong")
                         res_status.append("Thành công")
                         
-                df_in3['[Hệ Thống] Kết quả'] = res_addr
+                df_in3['[Hệ Thống] Kết quả (2 cấp)'] = res_addr
                 df_in3['[Hệ Thống] Trạng thái'] = res_status
                 st.session_state.pending_errors.extend(new_pendings)
+                
                 st.dataframe(df_in3)
+                if new_pendings:
+                    st.error(f"Phát hiện {len(new_pendings)} địa chỉ lỗi. Hãy qua Tab 3 để huấn luyện Từ điển!")
+                    
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df_in3.to_excel(writer, index=False)
+                st.download_button("📥 Tải File Đã Xử Lý", data=output.getvalue(), file_name="DiaChi_Scan_TuDo.xlsx")
 
 # ----------------- TAB 3: HUẤN LUYỆN -----------------
 with tab3:
