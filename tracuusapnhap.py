@@ -121,8 +121,69 @@ tab1, tab2, tab3 = st.tabs(["🔍 TRA CỨU DANH MỤC", "📁 XỬ LÝ CHUYỂN
 # ----------------- TAB 1: TRA CỨU -----------------
 with tab1:
     st.markdown("### 🔍 Tra cứu danh mục hành chính")
-    # T đã rút gọn khúc này giống y code Ver 3 m đã duyệt để tập trung bộ lòng Option ở dưới.
-    st.info("Khu vực tra cứu danh mục nhanh (Cũ <=> Mới)")
+    chieu_tra_cuu = st.radio("Chọn chiều tra cứu:", ["Từ Cũ sang Mới", "Từ Mới truy ngược Cũ"], horizontal=True)
+    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+    
+    if not df_map.empty:
+        if chieu_tra_cuu == "Từ Cũ sang Mới":
+            c1, c2, c3 = st.columns(3)
+            
+            with c1:
+                tinh_opts = ["-- Tất cả --"] + sorted(df_map['Tỉnh/Thành phố cũ'].dropna().unique().tolist())
+                tinh = st.selectbox("1. Tỉnh/Thành phố (Cũ):", options=tinh_opts)
+                
+            with c2:
+                huyen_opts = ["-- Tất cả --"] + sorted(df_map[df_map['Tỉnh/Thành phố cũ'] == tinh]['Quận/Huyện cũ'].dropna().unique().tolist()) if tinh != "-- Tất cả --" else ["-- Tất cả --"]
+                huyen = st.selectbox("2. Quận/Huyện (Cũ):", options=huyen_opts)
+                
+            with c3:
+                xa_opts = ["-- Tất cả --"] + sorted(df_map[(df_map['Tỉnh/Thành phố cũ'] == tinh) & (df_map['Quận/Huyện cũ'] == huyen)]['Phường/Xã cũ'].dropna().unique().tolist()) if huyen != "-- Tất cả --" and tinh != "-- Tất cả --" else ["-- Tất cả --"]
+                xa = st.selectbox("3. Phường/Xã (Cũ):", options=xa_opts)
+                
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🔍 Bắt đầu Tra cứu", use_container_width=True):
+                if tinh == "-- Tất cả --":
+                    st.warning("Vui lòng chọn ít nhất Tỉnh/Thành phố để tra cứu!")
+                elif huyen == "-- Tất cả --" and xa == "-- Tất cả --":
+                    tinh_moi = df_map[df_map['Tỉnh/Thành phố cũ'] == tinh]['Tỉnh/Thành phố mới'].iloc[0]
+                    st.info(f"📍 **Tỉnh/Thành phố tương đương:** {tinh_moi}")
+                elif xa == "-- Tất cả --":
+                    kq = df_map[(df_map['Tỉnh/Thành phố cũ'] == tinh) & (df_map['Quận/Huyện cũ'] == huyen)]
+                    st.success(f"📍 Các đơn vị mới thuộc {huyen}:")
+                    st.dataframe(
+                        kq[['Phường/Xã cũ', 'Tỉnh/Thành phố mới', 'Phường/Xã mới']],
+                        use_container_width=True, hide_index=True
+                    )
+                else:
+                    kq = df_map[(df_map['Tỉnh/Thành phố cũ'] == tinh) & (df_map['Quận/Huyện cũ'] == huyen) & (df_map['Phường/Xã cũ'] == xa)].iloc[0]
+                    st.info(f"📍 **Tỉnh/Thành phố mới:** {kq['Tỉnh/Thành phố mới']} \n\n📍 **Phường/Xã mới:** {kq['Phường/Xã mới']}")
+
+        else: # Chiều Mới -> Cũ
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                tinh_moi_opts = ["-- Tất cả --"] + sorted(df_map['Tỉnh/Thành phố mới'].dropna().unique().tolist())
+                tinh_moi = st.selectbox("1. Tỉnh/Thành phố (Mới):", options=tinh_moi_opts)
+                
+            with c2:
+                xa_moi_opts = ["-- Tất cả --"] + sorted(df_map[df_map['Tỉnh/Thành phố mới'] == tinh_moi]['Phường/Xã mới'].dropna().unique().tolist()) if tinh_moi != "-- Tất cả --" else ["-- Tất cả --"]
+                xa_moi = st.selectbox("2. Phường/Xã (Mới):", options=xa_moi_opts)
+                
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🔍 Truy vết Nguồn gốc", use_container_width=True):
+                if tinh_moi == "-- Tất cả --":
+                    st.warning("Vui lòng chọn ít nhất Tỉnh/Thành phố để tra cứu!")
+                elif xa_moi == "-- Tất cả --":
+                    tinh_cu_list = df_map[df_map['Tỉnh/Thành phố mới'] == tinh_moi]['Tỉnh/Thành phố cũ'].unique()
+                    tinh_cu_str = ", ".join(tinh_cu_list)
+                    st.info(f"📍 **Nguồn gốc Tỉnh/Thành phố cũ:** {tinh_cu_str}")
+                else:
+                    kq = df_map[(df_map['Tỉnh/Thành phố mới'] == tinh_moi) & (df_map['Phường/Xã mới'] == xa_moi)]
+                    st.success(f"📍 3 cấp đơn vị cũ cấu thành nên Phường/Xã này:")
+                    st.dataframe(
+                        kq[['Tỉnh/Thành phố cũ', 'Quận/Huyện cũ', 'Phường/Xã cũ']],
+                        use_container_width=True, hide_index=True
+                    )
 
 # ----------------- TAB 2: XỬ LÝ FILE -----------------
 with tab2:
