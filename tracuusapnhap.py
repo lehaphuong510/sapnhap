@@ -13,12 +13,43 @@ st.set_page_config(page_title="TRA CỨU SÁP NHẬP", layout="wide")
 
 st.markdown("""
 <style>
-    .stApp { background: linear-gradient(135deg, #FF1493 0%, #8A2BE2 100%); }
-    h1, h2, h3, h4, h5, h6, p, span, div, label, li { color: white !important; }
-    .stButton>button { background-color: #ffffff; color: #8A2BE2 !important; font-weight: bold; border-radius: 8px; }
-    .stButton>button:hover { background-color: #ffb6c1; color: #FF1493 !important; }
-    .stSelectbox div[data-baseweb="select"] { background-color: white !important; color: black !important; }
-    .stDataFrame { background-color: rgba(255, 255, 255, 0.9) !important; border-radius: 10px; }
+    /* 1. Trả nền về màu sáng mặc định của Streamlit */
+    .stApp {
+        background-color: #f8f9fa; /* Trắng xám nhẹ cho dịu mắt */
+    }
+    
+    /* 2. Tiêu đề H1, H2, H3 áp dụng hiệu ứng chữ Gradient Hồng - Tím */
+    h1, h2, h3 {
+        background: -webkit-linear-gradient(45deg, #FF1493, #8A2BE2);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: bold;
+    }
+
+    /* 3. Nút bấm mang màu cờ sắc áo */
+    .stButton>button {
+        background: linear-gradient(135deg, #FF1493 0%, #8A2BE2 100%);
+        color: white !important;
+        border: none;
+        border-radius: 8px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        transform: scale(1.02); /* Phóng to nhẹ khi rê chuột */
+        box-shadow: 0 4px 10px rgba(138, 43, 226, 0.4);
+        color: white !important;
+    }
+    
+    /* 4. Viền và nền nhẹ cho các hộp thông báo Info / Success */
+    div[data-testid="stInfo"] {
+        border-left-color: #8A2BE2;
+        background-color: rgba(138, 43, 226, 0.05);
+    }
+    div[data-testid="stSuccess"] {
+        border-left-color: #FF1493;
+        background-color: rgba(255, 20, 147, 0.05);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -164,24 +195,81 @@ tab1, tab2, tab3 = st.tabs(["🔍 TRA CỨU DANH MỤC", "📁 XỬ LÝ FILE", "
 
 # ----------------- TAB 1: TRA CỨU -----------------
 with tab1:
+    st.markdown("### 🔍 Tra cứu danh mục hành chính")
     chieu_tra_cuu = st.radio("Chọn chiều tra cứu:", ["Từ Cũ sang Mới", "Từ Mới truy ngược Cũ"], horizontal=True)
+    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+    
     if not df_map.empty:
         if chieu_tra_cuu == "Từ Cũ sang Mới":
-            tinh = st.selectbox("Chọn Tỉnh/Thành phố (Cũ):", options=["-- Chọn --"] + sorted(df_map['Tỉnh/Thành phố cũ'].dropna().unique().tolist()))
-            if tinh != "-- Chọn --":
-                huyen = st.selectbox("Chọn Quận/Huyện (Cũ):", options=["-- Chọn --"] + sorted(df_map[df_map['Tỉnh/Thành phố cũ'] == tinh]['Quận/Huyện cũ'].dropna().unique().tolist()))
-                if huyen != "-- Chọn --":
-                    xa = st.selectbox("Chọn Phường/Xã (Cũ):", options=["-- Chọn --"] + sorted(df_map[(df_map['Tỉnh/Thành phố cũ'] == tinh) & (df_map['Quận/Huyện cũ'] == huyen)]['Phường/Xã cũ'].dropna().unique().tolist()))
-                    if xa != "-- Chọn --":
-                        kq = df_map[(df_map['Tỉnh/Thành phố cũ'] == tinh) & (df_map['Quận/Huyện cũ'] == huyen) & (df_map['Phường/Xã cũ'] == xa)].iloc[0]
-                        st.info(f"**Kết quả mới:** {kq['Phường/Xã mới']} ({kq['Trạng thái sáp nhập']})")
-        else:
-            tinh = st.selectbox("Chọn Tỉnh/Thành phố (Mới):", options=["-- Chọn --"] + sorted(df_map['Tỉnh/Thành phố mới'].dropna().unique().tolist()))
-            if tinh != "-- Chọn --":
-                xa = st.selectbox("Chọn Phường/Xã (Mới):", options=["-- Chọn --"] + sorted(df_map[df_map['Tỉnh/Thành phố mới'] == tinh]['Phường/Xã mới'].dropna().unique().tolist()))
-                if xa != "-- Chọn --":
-                    kq = df_map[(df_map['Tỉnh/Thành phố mới'] == tinh) & (df_map['Phường/Xã mới'] == xa)]
-                    st.dataframe(kq[['Tỉnh/Thành phố cũ', 'Quận/Huyện cũ', 'Phường/Xã cũ']])
+            c1, c2, c3 = st.columns(3)
+            
+            with c1:
+                tinh_opts = ["-- Tất cả --"] + sorted(df_map['Tỉnh/Thành phố cũ'].dropna().unique().tolist())
+                tinh = st.selectbox("1. Tỉnh/Thành phố (Cũ):", options=tinh_opts)
+                
+            with c2:
+                if tinh != "-- Tất cả --":
+                    huyen_opts = ["-- Tất cả --"] + sorted(df_map[df_map['Tỉnh/Thành phố cũ'] == tinh]['Quận/Huyện cũ'].dropna().unique().tolist())
+                else:
+                    huyen_opts = ["-- Tất cả --"]
+                huyen = st.selectbox("2. Quận/Huyện (Cũ):", options=huyen_opts)
+                
+            with c3:
+                if huyen != "-- Tất cả --" and tinh != "-- Tất cả --":
+                    xa_opts = ["-- Tất cả --"] + sorted(df_map[(df_map['Tỉnh/Thành phố cũ'] == tinh) & (df_map['Quận/Huyện cũ'] == huyen)]['Phường/Xã cũ'].dropna().unique().tolist())
+                else:
+                    xa_opts = ["-- Tất cả --"]
+                xa = st.selectbox("3. Phường/Xã (Cũ):", options=xa_opts)
+                
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🔍 Bắt đầu Tra cứu", use_container_width=True):
+                # Tạo bộ lọc linh hoạt dựa trên lựa chọn
+                mask = pd.Series(True, index=df_map.index)
+                if tinh != "-- Tất cả --": mask &= (df_map['Tỉnh/Thành phố cũ'] == tinh)
+                if huyen != "-- Tất cả --": mask &= (df_map['Quận/Huyện cũ'] == huyen)
+                if xa != "-- Tất cả --": mask &= (df_map['Phường/Xã cũ'] == xa)
+                
+                kq = df_map[mask]
+                if kq.empty:
+                    st.warning("Không tìm thấy dữ liệu sáp nhập cho khu vực này.")
+                else:
+                    st.success(f"Tìm thấy {len(kq)} đơn vị có sự thay đổi!")
+                    st.dataframe(
+                        kq[['Tỉnh/Thành phố cũ', 'Quận/Huyện cũ', 'Phường/Xã cũ', 'Tỉnh/Thành phố mới', 'Phường/Xã mới', 'Trạng thái sáp nhập']],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+        else: # Chiều Mới -> Cũ
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                tinh_moi_opts = ["-- Tất cả --"] + sorted(df_map['Tỉnh/Thành phố mới'].dropna().unique().tolist())
+                tinh_moi = st.selectbox("1. Tỉnh/Thành phố (Mới):", options=tinh_moi_opts)
+                
+            with c2:
+                if tinh_moi != "-- Tất cả --":
+                    xa_moi_opts = ["-- Tất cả --"] + sorted(df_map[df_map['Tỉnh/Thành phố mới'] == tinh_moi]['Phường/Xã mới'].dropna().unique().tolist())
+                else:
+                    xa_moi_opts = ["-- Tất cả --"]
+                xa_moi = st.selectbox("2. Phường/Xã (Mới):", options=xa_moi_opts)
+                
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🔍 Truy vết Nguồn gốc", use_container_width=True):
+                mask = pd.Series(True, index=df_map.index)
+                if tinh_moi != "-- Tất cả --": mask &= (df_map['Tỉnh/Thành phố mới'] == tinh_moi)
+                if xa_moi != "-- Tất cả --": mask &= (df_map['Phường/Xã mới'] == xa_moi)
+                
+                kq = df_map[mask]
+                if kq.empty:
+                    st.warning("Không tìm thấy dữ liệu sáp nhập cho khu vực này.")
+                else:
+                    st.success(f"Tìm thấy {len(kq)} đơn vị cũ cấu thành khu vực này!")
+                    st.dataframe(
+                        kq[['Tỉnh/Thành phố mới', 'Phường/Xã mới', 'Tỉnh/Thành phố cũ', 'Quận/Huyện cũ', 'Phường/Xã cũ', 'Trạng thái sáp nhập']],
+                        use_container_width=True,
+                        hide_index=True
+                    )
 
 # ----------------- TAB 2: XỬ LÝ FILE -----------------
 with tab2:
