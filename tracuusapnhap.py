@@ -60,7 +60,7 @@ def load_data():
 if 'last_update' not in st.session_state:
     st.session_state.last_update = time.strftime("%H:%M:%S %d/%m/%Y")
 if 'pending_errors' not in st.session_state:
-    st.session_state.pending_errors = [] 
+    st.session_state.pending_errors = []
 
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
@@ -88,12 +88,13 @@ def clean_text_for_match(text):
     if not isinstance(text, str): return ""
     text = unicodedata.normalize('NFC', str(text)).lower()
     text = remove_accents(text)
+    # Tách số khỏi chữ hành chính (VD: p14 -> p 14, q10 -> q 10)
+    text = re.sub(r'\b(q|quan|p|phuong|h|huyen|x|xa|tx|tt)(\d+)\b', r'\1 \2', text)
     text = re.sub(r'[,.\-]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 def extract_core_name(text):
-    """ Hàm chuyên lột sạch tiền tố (Phường, Quận, Tỉnh) để so khớp 'lõi' """
     text = clean_text_for_match(text)
     stop_words = r'^(tinh|thanh pho|tp|quan|q|huyen|h|thi xa|tx|phuong|p|xa|x|thi tran|tt)\s+'
     return re.sub(stop_words, '', text).strip()
@@ -116,26 +117,41 @@ def build_abbreviation_dict(df):
 
 abbr_dict = build_abbreviation_dict(df_map)
 
-# Nạp từ điển người dùng
 user_dict = {}
 if not df_dict.empty:
     for _, row in df_dict.iterrows():
         chuan = str(row.get('Địa danh', '')).strip()
         tu_dien = str(row.get('Từ điển', '')).split(',')
         for td in tu_dien:
-            if td.strip():
-                user_dict[clean_text_for_match(td.strip())] = chuan
+            if td.strip(): user_dict[clean_text_for_match(td.strip())] = chuan
 
 def get_list_by_level(level, context_tinh=None, context_huyen=None):
-    if level == "Tỉnh":
-        return sorted(df_map['Tỉnh/Thành phố cũ'].unique().tolist())
-    elif level == "Quận":
-        if context_tinh: return sorted(df_map[df_map['Tỉnh/Thành phố cũ'] == context_tinh]['Quận/Huyện cũ'].unique().tolist())
-        return []
-    elif level == "Phường":
-        if context_tinh and context_huyen: return sorted(df_map[(df_map['Tỉnh/Thành phố cũ'] == context_tinh) & (df_map['Quận/Huyện cũ'] == context_huyen)]['Phường/Xã cũ'].unique().tolist())
-        return []
+    if level == "Tỉnh": return sorted(df_map['Tỉnh/Thành phố cũ'].unique().tolist())
+    elif level == "Quận": return sorted(df_map[df_map['Tỉnh/Thành phố cũ'] == context_tinh]['Quận/Huyện cũ'].unique().tolist()) if context_tinh else []
+    elif level == "Phường": return sorted(df_map[(df_map['Tỉnh/Thành phố cũ'] == context_tinh) & (df_map['Quận/Huyện cũ'] == context_huyen)]['Phường/Xã cũ'].unique().tolist()) if context_tinh and context_huyen else []
     return []
+
+# Thuật toán AI quét thực thể chuẩn xác nhất (Tránh bẫy P1 nhầm Q1)
+def smart_find_entity(entity_list, text, entity_type="None"):
+    candidates = []
+    for orig in entity_list:
+        if pd.isna(orig) or str(orig).strip() == '': continue
+        clean_full = clean_text_for_match(str(orig))
+        core = extract_core_name(clean_full)
+        candidates.append((orig, clean_full, core))
+        
+    candidates.sort(key=lambda x: len(x[2]), reverse=True)
+    
+    for orig, full, core in candidates:
+        if re.search(r'\b' + re.escape(full) + r'\b', text): return orig
+        if core.isdigit() and entity_type != "Tinh":
+            if entity_type == "Quan": prefix = r'\b(quan|q|huyen|h|tx|thi xa)\s+' + re.escape(core) + r'\b'
+            elif entity_type == "Phuong": prefix = r'\b(phuong|p|xa|x|tt|thi tran)\s+' + re.escape(core) + r'\b'
+            else: prefix = r'\b(quan|q|huyen|h|tx|thi xa|phuong|p|xa|x|tt|thi tran)\s+' + re.escape(core) + r'\b'
+            if re.search(prefix, text): return orig
+        else:
+            if core and re.search(r'\b' + re.escape(core) + r'\b', text): return orig
+    return None
 
 # ==========================================
 # CẤU TRÚC GIAO DIỆN (3 TAB)
@@ -163,11 +179,9 @@ with tab1:
                 
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🔍 Bắt đầu Tra cứu", use_container_width=True):
-                if tinh == "-- Tất cả --":
-                    st.warning("Vui lòng chọn ít nhất Tỉnh/Thành phố để tra cứu!")
+                if tinh == "-- Tất cả --": st.warning("Vui lòng chọn ít nhất Tỉnh/Thành phố để tra cứu!")
                 elif huyen == "-- Tất cả --" and xa == "-- Tất cả --":
-                    tinh_moi = df_map[df_map['Tỉnh/Thành phố cũ'] == tinh]['Tỉnh/Thành phố mới'].iloc[0]
-                    st.info(f"📍 **Tỉnh/Thành phố tương đương:** {tinh_moi}")
+                    st.info(f"📍 **Tỉnh/Thành phố tương đương:** {df_map[df_map['Tỉnh/Thành phố cũ'] == tinh]['Tỉnh/Thành phố mới'].iloc[0]}")
                 elif xa == "-- Tất cả --":
                     kq = df_map[(df_map['Tỉnh/Thành phố cũ'] == tinh) & (df_map['Quận/Huyện cũ'] == huyen)]
                     st.success(f"📍 Các đơn vị mới thuộc {huyen}:")
@@ -187,12 +201,9 @@ with tab1:
                 
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🔍 Truy vết Nguồn gốc", use_container_width=True):
-                if tinh_moi == "-- Tất cả --":
-                    st.warning("Vui lòng chọn ít nhất Tỉnh/Thành phố để tra cứu!")
+                if tinh_moi == "-- Tất cả --": st.warning("Vui lòng chọn ít nhất Tỉnh/Thành phố để tra cứu!")
                 elif xa_moi == "-- Tất cả --":
-                    tinh_cu_list = df_map[df_map['Tỉnh/Thành phố mới'] == tinh_moi]['Tỉnh/Thành phố cũ'].unique()
-                    tinh_cu_str = ", ".join(tinh_cu_list)
-                    st.info(f"📍 **Nguồn gốc Tỉnh/Thành phố cũ:** {tinh_cu_str}")
+                    st.info(f"📍 **Nguồn gốc Tỉnh/Thành phố cũ:** {', '.join(df_map[df_map['Tỉnh/Thành phố mới'] == tinh_moi]['Tỉnh/Thành phố cũ'].unique())}")
                 else:
                     kq = df_map[(df_map['Tỉnh/Thành phố mới'] == tinh_moi) & (df_map['Phường/Xã mới'] == xa_moi)]
                     st.success(f"📍 3 cấp đơn vị cũ cấu thành nên Phường/Xã này:")
@@ -229,23 +240,15 @@ with tab2:
             else:
                 kq = df_map[(df_map['Tỉnh/Thành phố cũ'] == t_val) & (df_map['Quận/Huyện cũ'] == q_val) & (df_map['Phường/Xã cũ'] == p_val)].iloc[0]
                 addr_prefix = f"{s_input.strip()}, " if s_input.strip() else ""
-                final_addr = f"{addr_prefix}{kq['Phường/Xã mới']}, {kq['Tỉnh/Thành phố mới']}"
-                st.success(f"**Kết quả (Chuẩn 2 cấp):** {final_addr}")
+                st.success(f"**Kết quả (Chuẩn 2 cấp):** {addr_prefix}{kq['Phường/Xã mới']}, {kq['Tỉnh/Thành phố mới']}")
 
     elif option.startswith("2️⃣"):
-        st.info("💡 Độ chính xác 100%. Bạn có thể gõ thiếu chữ 'Phường', 'Quận' trong file, hệ thống vẫn tự động lột lõi và map trúng phóc!")
+        st.info("💡 Hệ thống tự động lột lõi, xử lý hoàn hảo dữ liệu thiếu chữ 'Phường', 'Quận'.")
         
         template_df = pd.DataFrame(columns=["Số nhà + Tên đường", "Phường/Xã", "Quận/Huyện", "Tỉnh/Thành phố"])
         template_io = io.BytesIO()
-        with pd.ExcelWriter(template_io, engine='xlsxwriter') as writer:
-            template_df.to_excel(writer, index=False)
-            
-        st.download_button(
-            label="⬇️ Tải file Excel mẫu (Template)",
-            data=template_io.getvalue(),
-            file_name="File_Mau_Chuan_Hoa_Dia_Chi.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        with pd.ExcelWriter(template_io, engine='xlsxwriter') as writer: template_df.to_excel(writer, index=False)
+        st.download_button(label="⬇️ Tải file Excel mẫu (Template)", data=template_io.getvalue(), file_name="Mau_Chuan.xlsx")
         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
 
         upl_2 = st.file_uploader("Upload Excel (đã điền theo mẫu)", type=['xlsx'], key="file2")
@@ -259,7 +262,6 @@ with tab2:
             
             if st.button("🚀 Bắt đầu Quét File", use_container_width=True):
                 res_addr, res_status = [], []
-                
                 with st.spinner("Đang tra cứu dữ liệu Master..."):
                     df_map_core = df_map.copy()
                     df_map_core['p_core'] = df_map_core['Phường/Xã cũ'].apply(extract_core_name)
@@ -270,18 +272,15 @@ with tab2:
                         raw_p = str(row_in[col_w])
                         p_clean = user_dict.get(clean_text_for_match(raw_p), clean_text_for_match(raw_p))
                         
-                        p_core = extract_core_name(p_clean)
-                        q_core = extract_core_name(str(row_in[col_d]))
-                        t_core = extract_core_name(str(row_in[col_p]))
-                        
-                        mask = (df_map_core['p_core'] == p_core) & (df_map_core['q_core'] == q_core) & (df_map_core['t_core'] == t_core)
+                        mask = (df_map_core['p_core'] == extract_core_name(p_clean)) & \
+                               (df_map_core['q_core'] == extract_core_name(str(row_in[col_d]))) & \
+                               (df_map_core['t_core'] == extract_core_name(str(row_in[col_p])))
                         kq = df_map[mask]
                         
                         if not kq.empty:
-                            row_master = kq.iloc[0]
                             s_val = str(row_in[col_s]).strip()
                             addr_prefix = f"{s_val}, " if s_val and s_val.lower() != 'nan' else ""
-                            res_addr.append(f"{addr_prefix}{row_master['Phường/Xã mới']}, {row_master['Tỉnh/Thành phố mới']}")
+                            res_addr.append(f"{addr_prefix}{kq.iloc[0]['Phường/Xã mới']}, {kq.iloc[0]['Tỉnh/Thành phố mới']}")
                             res_status.append("Thành công")
                         else:
                             res_addr.append("")
@@ -289,123 +288,127 @@ with tab2:
                             
                 df_in2['[Hệ Thống] Kết quả (2 cấp)'] = res_addr
                 df_in2['[Hệ Thống] Trạng thái'] = res_status
-                
                 st.dataframe(df_in2)
+                
                 output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_in2.to_excel(writer, index=False)
-                st.download_button("📥 Tải File Đã Xử Lý", data=output.getvalue(), file_name="DiaChi_Chuan_Mau_Done.xlsx")
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer: df_in2.to_excel(writer, index=False)
+                st.download_button("📥 Tải File Đã Xử Lý", data=output.getvalue(), file_name="Ket_Qua_Opt2.xlsx")
 
     elif option.startswith("3️⃣"):
-        st.info("💡 Hệ thống đang áp dụng AI quét lùi từ Tỉnh -> Quận -> Phường để bóc tách chính xác chuỗi địa chỉ.")
+        st.info("💡 AI 4.0: Song kiếm hợp bích - Nhận diện cả Địa chỉ Cũ lẫn Mới, tự động khôi phục Quận bị khuyết.")
         upl_3 = st.file_uploader("Upload Excel chứa địa chỉ trộn chung", type=['xlsx'], key="file3")
+        
         if upl_3:
             df_in3 = pd.read_excel(upl_3)
             col_addr = st.selectbox("Chọn Cột Địa Chỉ Đầy Đủ:", df_in3.columns)
             
-            if st.button("🚀 Bắt đầu Quét Chuỗi", use_container_width=True):
+            if st.button("🚀 Bắt đầu Quét Chuỗi AI", use_container_width=True):
                 res_addr, res_status = [], []
                 new_pendings = []
                 
-                with st.spinner("Đang cho AI quét lùi từ Phải sang Trái..."):
+                with st.spinner("Đang Săn Lùng Địa Chỉ..."):
                     for _, row in df_in3.iterrows():
                         raw_str = str(row[col_addr])
                         clean_str = clean_text_for_match(raw_str)
-                        
-                        # 1. Tìm Tỉnh/Thành phố
+                        for typo, correct in user_dict.items():
+                            clean_str = clean_str.replace(typo, clean_text_for_match(correct))
+                            
+                        # 1. Tìm Tỉnh
                         found_tinh = None
                         for abbr, full_names in abbr_dict.items():
                             if re.search(r'\b' + abbr + r'\b', clean_str):
-                                found_tinh = full_names[0]
-                                break
-                        
+                                found_tinh = full_names[0]; break
                         if not found_tinh:
-                            for t in df_map['Tỉnh/Thành phố cũ'].unique():
-                                t_clean = clean_text_for_match(str(t))
-                                if t_clean in clean_str:
-                                    found_tinh = str(t)
-                                    break
-                                    
+                            found_tinh = smart_find_entity(df_map['Tỉnh/Thành phố cũ'].unique(), clean_str, "Tinh")
+                            
                         if not found_tinh:
-                            res_addr.append(raw_str)
-                            res_status.append("⚠️ Không nhận diện được Tỉnh")
-                            new_pendings.append({"raw": raw_str, "error_level": "Tỉnh", "context_tinh": "", "context_huyen": "", "typo": ""})
+                            res_addr.append(""); res_status.append("⚠️ Không nhận diện được Tỉnh")
+                            new_pendings.append({"raw": raw_str, "error_level": "Tỉnh", "context_tinh": "", "context_huyen": "", "typo": raw_str})
                             continue
                             
-                        # 2. Tìm Quận/Huyện
-                        found_huyen = None
+                        # 2. Tìm Quận để xác định CŨ hay MỚI
                         ds_huyen = df_map[df_map['Tỉnh/Thành phố cũ'] == found_tinh]['Quận/Huyện cũ'].unique()
-                        for h in ds_huyen:
-                            h_clean = clean_text_for_match(str(h))
-                            h_core = extract_core_name(h_clean)
-                            if h_clean in clean_str or h_core in clean_str:
-                                found_huyen = str(h)
-                                break
-                                
-                        if not found_huyen:
-                            res_addr.append(raw_str)
-                            res_status.append(f"⚠️ Lỗi Quận/Huyện của {found_tinh}")
-                            new_pendings.append({"raw": raw_str, "error_level": "Quận", "context_tinh": found_tinh, "context_huyen": "", "typo": ""})
-                            continue
-                            
-                        # 3. Tìm Phường/Xã
-                        found_xa = None
-                        ds_xa = df_map[(df_map['Tỉnh/Thành phố cũ'] == found_tinh) & (df_map['Quận/Huyện cũ'] == found_huyen)]['Phường/Xã cũ'].unique()
-                        for x in ds_xa:
-                            x_clean = clean_text_for_match(str(x))
-                            x_core = extract_core_name(x_clean)
-                            if x_clean in clean_str or x_core in clean_str:
-                                found_xa = str(x)
-                                break
-                                
-                        if not found_xa:
-                            res_addr.append(raw_str)
-                            res_status.append(f"⚠️ Lỗi Phường/Xã của {found_huyen}")
-                            new_pendings.append({"raw": raw_str, "error_level": "Phường", "context_tinh": found_tinh, "context_huyen": found_huyen, "typo": ""})
-                            continue
-                            
-                        # 4. CHỐT KẾT QUẢ ĐÃ TÌM ĐƯỢC
-                        kq = df_map[(df_map['Tỉnh/Thành phố cũ'] == found_tinh) & (df_map['Quận/Huyện cũ'] == found_huyen) & (df_map['Phường/Xã cũ'] == found_xa)].iloc[0]
+                        found_huyen = smart_find_entity(ds_huyen, clean_str, "Quan")
                         
-                        # Demo cắt lấy số nhà/đường: Lấy phần trước chữ Phường/Quận/Tỉnh đầu tiên xuất hiện
-                        idx = clean_str.find(extract_core_name(clean_text_for_match(str(found_xa))))
+                        found_xa_final = None
+                        is_new_address = False
+                        
+                        if not found_huyen:
+                            # KO CÓ QUẬN -> CHECK XEM ĐÃ LÀ ĐỊA CHỈ MỚI CHƯA
+                            ds_xa_moi = df_map[df_map['Tỉnh/Thành phố cũ'] == found_tinh]['Phường/Xã mới'].unique()
+                            found_xa_moi = smart_find_entity(ds_xa_moi, clean_str, "Phuong")
+                            
+                            if found_xa_moi:
+                                found_xa_final = found_xa_moi
+                                is_new_address = True
+                            else:
+                                # KO PHẢI MỚI -> LÀ ĐỊA CHỈ CŨ BỊ KHUYẾT QUẬN -> SUY LUẬN
+                                ds_xa_cu = df_map[df_map['Tỉnh/Thành phố cũ'] == found_tinh]['Phường/Xã cũ'].unique()
+                                found_xa_cu = smart_find_entity(ds_xa_cu, clean_str, "Phuong")
+                                if found_xa_cu:
+                                    ds_huyen_cua_xa = df_map[(df_map['Tỉnh/Thành phố cũ'] == found_tinh) & (df_map['Phường/Xã cũ'] == found_xa_cu)]['Quận/Huyện cũ'].unique()
+                                    if len(ds_huyen_cua_xa) == 1:
+                                        found_huyen = ds_huyen_cua_xa[0]
+                                        found_xa_final = found_xa_cu
+                                    else:
+                                        res_addr.append(""); res_status.append(f"⚠️ Trùng tên Phường '{found_xa_cu}' ở nhiều Quận")
+                                        continue
+                                else:
+                                    res_addr.append(""); res_status.append(f"⚠️ Lỗi Phường/Xã của {found_tinh}")
+                                    new_pendings.append({"raw": raw_str, "error_level": "Phường", "context_tinh": found_tinh, "context_huyen": "", "typo": ""})
+                                    continue
+                        else:
+                            # CÓ QUẬN -> CHẮC CHẮN LÀ ĐỊA CHỈ CŨ
+                            ds_xa_cu = df_map[(df_map['Tỉnh/Thành phố cũ'] == found_tinh) & (df_map['Quận/Huyện cũ'] == found_huyen)]['Phường/Xã cũ'].unique()
+                            found_xa_final = smart_find_entity(ds_xa_cu, clean_str, "Phuong")
+                            if not found_xa_final:
+                                res_addr.append(""); res_status.append(f"⚠️ Lỗi Phường/Xã của {found_huyen}")
+                                new_pendings.append({"raw": raw_str, "error_level": "Phường", "context_tinh": found_tinh, "context_huyen": found_huyen, "typo": ""})
+                                continue
+
+                        # 4. CHỐT KẾT QUẢ VÀ TÁCH SỐ NHÀ
+                        core_xa = extract_core_name(clean_text_for_match(str(found_xa_final)))
+                        idx = clean_str.find(core_xa)
                         so_nha = raw_str[:idx].strip(' ,.-') if idx > 0 else ""
                         addr_prefix = f"{so_nha}, " if so_nha else ""
                         
-                        res_addr.append(f"{addr_prefix}{kq['Phường/Xã mới']}, {kq['Tỉnh/Thành phố mới']}")
-                        res_status.append("Thành công")
+                        if is_new_address:
+                            kq = df_map[(df_map['Tỉnh/Thành phố cũ'] == found_tinh) & (df_map['Phường/Xã mới'] == found_xa_final)].iloc[0]
+                            res_addr.append(f"{addr_prefix}{kq['Phường/Xã mới']}, {kq['Tỉnh/Thành phố mới']}")
+                            res_status.append("Đã là địa chỉ Mới (Giữ nguyên)")
+                        else:
+                            kq = df_map[(df_map['Tỉnh/Thành phố cũ'] == found_tinh) & (df_map['Quận/Huyện cũ'] == found_huyen) & (df_map['Phường/Xã cũ'] == found_xa_final)].iloc[0]
+                            res_addr.append(f"{addr_prefix}{kq['Phường/Xã mới']}, {kq['Tỉnh/Thành phố mới']}")
+                            res_status.append("Thành công (Đã chuyển đổi)")
 
                 df_in3['[Hệ Thống] Kết quả (2 cấp)'] = res_addr
                 df_in3['[Hệ Thống] Trạng thái'] = res_status
-                st.session_state.pending_errors.extend(new_pendings)
                 
-                st.dataframe(df_in3)
                 if new_pendings:
-                    st.error(f"Phát hiện {len(new_pendings)} địa chỉ lỗi. Hãy qua Tab 3 để huấn luyện Từ điển!")
+                    st.session_state.pending_errors.extend(new_pendings)
+                    st.error(f"Phát hiện {len(new_pendings)} địa chỉ lỗi. Hãy qua Tab 3 để huấn luyện!")
+                else:
+                    st.success("Tuyệt vời! File đã được quét sạch bóng không trượt một ai!")
                     
+                st.dataframe(df_in3)
                 output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_in3.to_excel(writer, index=False)
-                st.download_button("📥 Tải File Đã Xử Lý", data=output.getvalue(), file_name="DiaChi_Scan_TuDo.xlsx")
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer: df_in3.to_excel(writer, index=False)
+                st.download_button("📥 Tải File Đã Xử Lý", data=output.getvalue(), file_name="Ket_Qua_Opt3.xlsx")
 
 # ----------------- TAB 3: HUẤN LUYỆN -----------------
 with tab3:
     st.markdown("### 🧠 Dạy hệ thống nhận diện TỪ GÕ SAI (Từ điển)")
-    
     if not st.session_state.pending_errors:
         st.success("Tuyệt vời! Hiện không có từ lạ nào bị kẹt.")
     else:
         st.write("Hệ thống đã khoanh vùng lỗi theo cấp. Bạn chỉ cần chọn đúng Tên chuẩn để dạy nó:")
-        
-        # Lấy 1 lỗi đầu tiên ra xử lý cho gọn màn hình
         err = st.session_state.pending_errors[0]
         
         st.warning(f"**Chuỗi bị lỗi:** {err['raw']}")
-        st.info(f"**Phân tích AI:** Tỉnh/Thành đã chốt là `{err['context_tinh']}`. Phát hiện lỗi gõ sai ở cấp **{err['error_level']}**.")
+        st.info(f"**Phân tích AI:** Tỉnh/Thành chốt là `{err['context_tinh']}`. Lỗi cấp **{err['error_level']}**.")
         
         c_a, c_b = st.columns([1, 1])
-        with c_a:
-            typo_input = st.text_input("Trích xuất chữ viết sai:", value=err['typo'])
+        with c_a: typo_input = st.text_input("Trích xuất chữ viết sai:", value=err['typo'])
         with c_b:
             opts = get_list_by_level(err['error_level'], err['context_tinh'], err['context_huyen'])
             chosen = st.selectbox(f"Chọn {err['error_level']} chuẩn để map:", options=["-- Chọn --"] + opts)
