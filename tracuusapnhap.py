@@ -47,6 +47,7 @@ def get_gspread_client():
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     return gspread.authorize(credentials)
 
+# Bỏ ttl=0 để Form Tab 1 không bị lag mỗi lần click!
 @st.cache_data
 def load_data():
     client = get_gspread_client()
@@ -54,7 +55,7 @@ def load_data():
     df_map = pd.DataFrame(sheet.worksheet("Mapping").get_all_records())
     df_dict = pd.DataFrame(sheet.worksheet("Dict").get_all_records())
     
-    # Ép chuẩn Unicode NFC toàn tập
+    # [VACCINE 1]: Ép chuẩn Unicode NFC toàn tập để chống lệch bảng mã (Trị bệnh Case 2: Phường Tân Phú)
     def normalize_nfc(text):
         if pd.isna(text): return ""
         return unicodedata.normalize('NFC', str(text)).strip()
@@ -116,6 +117,9 @@ def build_abbreviation_dict(df):
             if abbr:
                 if abbr not in abbr_dict: abbr_dict[abbr] = []
                 abbr_dict[abbr].append(tinh)
+        if 'hcm' not in abbr_dict: abbr_dict['hcm'] = ['Thành phố Hồ Chí Minh']
+        if 'tphcm' not in abbr_dict: abbr_dict['tphcm'] = ['Thành phố Hồ Chí Minh']
+        if 'hn' not in abbr_dict: abbr_dict['hn'] = ['Thành phố Hà Nội']
     return abbr_dict
 
 abbr_dict = build_abbreviation_dict(df_map)
@@ -135,15 +139,8 @@ def get_list_by_level(level, context_tinh=None, context_huyen=None):
     return []
 
 # ==========================================
-# AI 9.5: INDEX TRACKING (MẶT NẠ CHUỖI) & CHỐNG PHÂN BIỆT HOA THƯỜNG
+# AI 8.0 (BẢN GỐC): SLIDING WINDOW & NÉ BẪY SỐ NHÀ
 # ==========================================
-def mask_core_in_clean_str(text, entity):
-    """ Che tàng hình chữ đã nhận diện trên bản sao, giữ nguyên chuỗi gốc """
-    if not entity: return text
-    core = extract_core_name(entity)
-    if not core: return text
-    return re.sub(r'\b' + re.escape(core) + r'\b', lambda m: ' ' * len(m.group(0)), text)
-
 def smart_find_entity(entity_list, text, entity_type="None"):
     candidates = []
     for orig in entity_list:
@@ -154,7 +151,7 @@ def smart_find_entity(entity_list, text, entity_type="None"):
         
     candidates.sort(key=lambda x: len(x[2]), reverse=True)
     
-    # Lớp 1: Tiền tố rõ ràng
+    # LỚP 1: Tiền tố rõ ràng (Quét lùi bằng reversed)
     for orig, full, core in candidates:
         if entity_type == "Quan": prefix = r'\b(quan|q|huyen|h|tx|thi xa)\b\.?\s*'
         elif entity_type == "Phuong": prefix = r'\b(phuong|p|xa|x|tt|thi tran)\b\.?\s*'
@@ -165,16 +162,16 @@ def smart_find_entity(entity_list, text, entity_type="None"):
             matches = list(re.finditer(prefix + re.escape(core) + r'\b', text))
             if matches: return orig
             
-    # Lớp 2: Lõi độc lập (Quét Lùi Sliding Window)
+    # LỚP 2: Lõi độc lập (Quét Lùi Sliding Window)
     for orig, full, core in candidates:
-        if core.isdigit(): continue
+        if core.isdigit(): continue # Quận 1, Phường 2 thì bắt buộc phải dính Lớp 1
         
         matches = list(re.finditer(r'\b' + re.escape(core) + r'\b', text))
         if matches:
             for match in reversed(matches):
                 preceding = text[:match.start()].strip()
                 
-                # Né bẫy cướp cờ Quận/Phường chéo
+                # Né bẫy: Cướp cờ Quận/Phường chéo (VD Q. Tân Phú)
                 conflict_match = re.search(r'\b(quan|q|huyen|h|tx|thi xa|phuong|p|xa|x|tt|thi tran|tinh|tp)\b\.?$', preceding)
                 if conflict_match:
                     p_found = conflict_match.group(1).replace('.', '')
@@ -184,7 +181,7 @@ def smart_find_entity(entity_list, text, entity_type="None"):
                     elif entity_type == "Tinh" and p_found in ['tinh', 'tp', 'thanh pho']: is_valid = True
                     if not is_valid: continue
                 
-                # Né bẫy Tên đường (đứng ngay sau số nhà)
+                # Né bẫy: Tên đường nằm sát số nhà (223 Tân Thành)
                 if re.match(r'^(số\s+)?(đường\s+)?\d+[a-z]?(/\d+)*[,\s-]*$', preceding):
                     continue
                     
@@ -279,7 +276,7 @@ with tab1:
 # ----------------- TAB 2: XỬ LÝ FILE -----------------
 with tab2:
     st.markdown("### Chọn phương thức xử lý địa chỉ")
-    option = st.radio("", ["1️⃣ Chuyển đổi Đơn lẻ", "2️⃣ File Mẫu Chuẩn", "3️⃣ File Tự Do (AI 9.5 + Data Editor)"], horizontal=True)
+    option = st.radio("", ["1️⃣ Chuyển đổi Đơn lẻ", "2️⃣ File Mẫu Chuẩn", "3️⃣ File Tự Do (Sửa tay + Fix Bẫy)"], horizontal=True)
     st.markdown("<hr style='margin: 5px 0;'>", unsafe_allow_html=True)
 
     if option.startswith("1️⃣"):
@@ -314,11 +311,11 @@ with tab2:
                 else: st.success(f"**Kết quả:** {final_addr}")
 
     elif option.startswith("2️⃣"):
-        st.info("💡 Độ chính xác 100% nhờ xử lý lỗi Unicode và lột lõi thông minh.")
+        st.info("💡 Hệ thống tự động lột lõi, xử lý hoàn hảo dữ liệu thiếu chữ 'Phường', 'Quận'.")
         template_df = pd.DataFrame(columns=["Số nhà + Tên đường", "Phường/Xã", "Quận/Huyện", "Tỉnh/Thành phố"])
         template_io = io.BytesIO()
         with pd.ExcelWriter(template_io, engine='xlsxwriter') as writer: template_df.to_excel(writer, index=False)
-        st.download_button("⬇️ Tải file Excel mẫu (Template)", data=template_io.getvalue(), file_name="Mau_Chuan.xlsx")
+        st.download_button(label="⬇️ Tải file Excel mẫu (Template)", data=template_io.getvalue(), file_name="Mau_Chuan.xlsx")
         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
 
         upl_2 = st.file_uploader("Upload Excel (đã điền theo mẫu)", type=['xlsx'], key="file2")
@@ -361,13 +358,12 @@ with tab2:
                 
                 st.info("💡 BẢNG KẾT QUẢ TƯƠNG TÁC: Click đúp vào ô bất kỳ để SỬA TAY những địa chỉ bạn thấy chưa chuẩn, sau đó bấm nút Tải xuống.")
                 edited_df2 = st.data_editor(df_in2, use_container_width=True)
-                
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer: edited_df2.to_excel(writer, index=False)
-                st.download_button("📥 Tải File Đã Xử Lý (Bao gồm ô tự sửa)", data=output.getvalue(), file_name="Ket_Qua_Opt2.xlsx")
+                st.download_button("📥 Tải File Đã Xử Lý (Bao gồm cả các ô bạn đã sửa tay)", data=output.getvalue(), file_name="Ket_Qua_Opt2.xlsx")
 
     elif option.startswith("3️⃣"):
-        st.info("💡 AI 9.5: Cắt lớp tàng hình, Bảo toàn nguyên vẹn số nhà và Chỉnh sửa trực tiếp!")
+        st.info("💡 AI 8.0: Chế độ Human-in-the-loop. Sửa dấu $ và thêm Data Editor siêu việt.")
         upl_3 = st.file_uploader("Upload Excel chứa địa chỉ trộn chung", type=['xlsx'], key="file3")
         
         if upl_3:
@@ -409,69 +405,51 @@ with tab2:
                         final_tinh = None; final_xa = None; final_huyen = None
                         status_warning = ""
                         
-                        # --- 1. QUÉT ĐỊA CHỈ MỚI TRƯỚC (CHỐNG LỆCH HOA/THƯỜNG) ---
+                        # --- 1. QUÉT ĐỊA CHỈ MỚI TRƯỚC ---
                         tinh_moi_unique = df_map['Tỉnh/Thành phố mới'].dropna().unique()
-                        final_tinh_moi = smart_find_entity(tinh_moi_unique, clean_str, "Tinh")
-                        
-                        if not final_tinh_moi:
-                            if re.search(r'\b(hcm|tphcm|tp hcm)\b$', clean_str): 
-                                match_tinh = [t for t in tinh_moi_unique if 'hồ chí minh' in clean_text_for_match(str(t))]
-                                if match_tinh: final_tinh_moi = match_tinh[0]
-                            elif re.search(r'\b(hn)\b$', clean_str):
-                                match_tinh = [t for t in tinh_moi_unique if 'hà nội' in clean_text_for_match(str(t))]
-                                if match_tinh: final_tinh_moi = match_tinh[0]
-                                
-                        if final_tinh_moi:
-                            clean_str_masked_moi = mask_core_in_clean_str(clean_str, final_tinh_moi)
-                            ds_xa_moi = df_map[df_map['Tỉnh/Thành phố mới'] == final_tinh_moi]['Phường/Xã mới'].dropna().unique()
-                            found_x_moi = smart_find_entity(ds_xa_moi, clean_str_masked_moi, "Phuong")
+                        for abbr, full_names in abbr_dict.items():
+                            # BỎ DẤU $ Ở ĐÂY: Chống bệnh mù tạm thời khi khách có ghi chú ở cuối câu (Case 2: TpHCM __NOTE__)
+                            if re.search(r'\b' + abbr + r'\b', clean_str): final_tinh = full_names[0]; break
+                            
+                        if not final_tinh:
+                            final_tinh = smart_find_entity(tinh_moi_unique, clean_str, "Tinh")
+                            
+                        if final_tinh and final_tinh in tinh_moi_unique:
+                            ds_xa_moi = df_map[df_map['Tỉnh/Thành phố mới'] == final_tinh]['Phường/Xã mới'].dropna().unique()
+                            found_x_moi = smart_find_entity(ds_xa_moi, clean_str, "Phuong")
                             if found_x_moi:
                                 is_new_address = True
-                                final_tinh = final_tinh_moi
                                 final_xa = found_x_moi
                                 
                         # --- 2. NẾU KHÔNG PHẢI MỚI -> QUÉT ĐỊA CHỈ CŨ ---
                         if not is_new_address:
-                            tinh_cu_unique = df_map['Tỉnh/Thành phố cũ'].dropna().unique()
-                            final_tinh_cu = smart_find_entity(tinh_cu_unique, clean_str, "Tinh")
-                            
-                            if not final_tinh_cu:
-                                if re.search(r'\b(hcm|tphcm|tp hcm)\b', clean_str): 
-                                    match_tinh = [t for t in tinh_cu_unique if 'hồ chí minh' in clean_text_for_match(str(t))]
-                                    if match_tinh: final_tinh_cu = match_tinh[0]
-                                elif re.search(r'\b(hn)\b', clean_str):
-                                    match_tinh = [t for t in tinh_cu_unique if 'hà nội' in clean_text_for_match(str(t))]
-                                    if match_tinh: final_tinh_cu = match_tinh[0]
+                            if not final_tinh:
+                                final_tinh = smart_find_entity(df_map['Tỉnh/Thành phố cũ'].dropna().unique(), clean_str, "Tinh")
+                                if not final_tinh:
+                                    if re.search(r'\b(hcm|tphcm|tp hcm)\b', clean_str): final_tinh = "Thành phố Hồ Chí Minh"
+                                    elif re.search(r'\b(hn)\b', clean_str): final_tinh = "Thành phố Hà Nội"
                                 
-                            final_tinh = final_tinh_cu
                             if not final_tinh:
                                 res_addr.append(""); res_status.append("⚠️ Không nhận diện được Tỉnh")
                                 new_pendings.append({"raw": raw_str, "found_tinh": None, "found_huyen": None, "found_xa": None})
                                 continue
                                 
-                            clean_str_masked_cu = mask_core_in_clean_str(clean_str, final_tinh)
                             ds_huyen_cu = df_map[df_map['Tỉnh/Thành phố cũ'] == final_tinh]['Quận/Huyện cũ'].dropna().unique()
-                            found_h_cu = smart_find_entity(ds_huyen_cu, clean_str_masked_cu, "Quan")
+                            found_h_cu = smart_find_entity(ds_huyen_cu, clean_str, "Quan")
                             
                             if found_h_cu:
-                                clean_str_masked_cu2 = mask_core_in_clean_str(clean_str_masked_cu, found_h_cu)
                                 ds_xa_cu = df_map[(df_map['Tỉnh/Thành phố cũ'] == final_tinh) & (df_map['Quận/Huyện cũ'] == found_h_cu)]['Phường/Xã cũ'].dropna().unique()
-                                found_x_cu = smart_find_entity(ds_xa_cu, clean_str_masked_cu2, "Phuong")
+                                found_x_cu = smart_find_entity(ds_xa_cu, clean_str, "Phuong")
                                 if found_x_cu:
                                     final_huyen = found_h_cu; final_xa = found_x_cu
                                 else:
                                     # KHÁCH GHI NHẦM QUẬN -> TỰ SỬA QUẬN
                                     ds_xa_cu_all = df_map[df_map['Tỉnh/Thành phố cũ'] == final_tinh]['Phường/Xã cũ'].dropna().unique()
-                                    found_x_cu_all = smart_find_entity(ds_xa_cu_all, clean_str_masked_cu, "Phuong")
+                                    found_x_cu_all = smart_find_entity(ds_xa_cu_all, clean_str, "Phuong")
                                     if found_x_cu_all:
-                                        ds_h_cua_x = df_map[(df_map['Tỉnh/Thành phố cũ'] == final_tinh) & (df_map['Phường/Xã cũ'] == found_x_cu_all)]['Quận/Huyện cũ'].dropna().unique()
-                                        if len(ds_h_cua_x) == 1:
-                                            final_huyen = ds_h_cua_x[0]; final_xa = found_x_cu_all
-                                            status_warning = "⚠️ Nhớ kiểm tra lại (Hệ thống tự động sửa Quận do mâu thuẫn)"
-                                        else:
-                                            res_addr.append(""); res_status.append(f"⚠️ Trùng tên Phường '{found_x_cu_all}' ở nhiều Quận")
-                                            new_pendings.append({"raw": raw_str, "found_tinh": final_tinh, "found_huyen": None, "found_xa": found_x_cu_all})
-                                            continue
+                                        real_huyen = df_map[(df_map['Tỉnh/Thành phố cũ'] == final_tinh) & (df_map['Phường/Xã cũ'] == found_x_cu_all)]['Quận/Huyện cũ'].iloc[0]
+                                        final_huyen = real_huyen; final_xa = found_x_cu_all
+                                        status_warning = "⚠️ Nhớ kiểm tra lại (Hệ thống tự động sửa Quận do mâu thuẫn)"
                                     else:
                                         res_addr.append(""); res_status.append(f"⚠️ Lỗi Phường/Xã của {found_h_cu}")
                                         new_pendings.append({"raw": raw_str, "error_level": "Phường", "context_tinh": final_tinh, "context_huyen": found_h_cu, "typo": ""})
@@ -479,7 +457,7 @@ with tab2:
                             else:
                                 # KHÁCH BỎ QUÊN QUẬN -> TỰ SUY TỪ PHƯỜNG
                                 ds_xa_cu_all = df_map[df_map['Tỉnh/Thành phố cũ'] == final_tinh]['Phường/Xã cũ'].dropna().unique()
-                                found_x_cu = smart_find_entity(ds_xa_cu_all, clean_str_masked_cu, "Phuong")
+                                found_x_cu = smart_find_entity(ds_xa_cu_all, clean_str, "Phuong")
                                 if found_x_cu:
                                     ds_h_cua_x = df_map[(df_map['Tỉnh/Thành phố cũ'] == final_tinh) & (df_map['Phường/Xã cũ'] == found_x_cu)]['Quận/Huyện cũ'].dropna().unique()
                                     if len(ds_h_cua_x) == 1:
@@ -494,15 +472,17 @@ with tab2:
                                     new_pendings.append({"raw": raw_str, "found_tinh": final_tinh, "found_huyen": None, "found_xa": None})
                                     continue
 
-                        # --- BƯỚC 3: CẮT CHUỖI SỐ NHÀ BẢO TOÀN NGUYÊN VẸN ---
+                        # --- BƯỚC 3: CẮT CHUỖI SỐ NHÀ CHUẨN XÁC ---
                         idx_xa = get_cut_index(raw_str_processed, final_xa, "Phuong")
                         idx_huyen = get_cut_index(raw_str_processed, final_huyen, "Quan") if not is_new_address else len(raw_str_processed)
                         idx_tinh = get_cut_index(raw_str_processed, final_tinh, "Tinh")
                         
                         cut_idx = min([idx for idx in [idx_xa, idx_huyen, idx_tinh] if idx > 0] + [len(raw_str_processed)])
                         
+                        # Không chém cụt bằng dấu phẩy nữa, lấy TOÀN BỘ những gì đằng trước
                         so_nha = raw_str_processed[:cut_idx].strip(' ,.-')
                         
+                        # Khôi phục ngoặc đơn ghi chú (nếu có)
                         for k, v in list(notes_dict.items()):
                             if k in so_nha:
                                 so_nha = so_nha.replace(k, v)
@@ -532,11 +512,11 @@ with tab2:
                 
                 if new_pendings:
                     st.session_state.pending_errors.extend(new_pendings)
-                    st.error(f"Phát hiện {len(new_pendings)} địa chỉ có vấn đề. Bạn có thể Bỏ qua/Sửa tay ngay trong bảng dưới đây, hoặc sang Tab 3 để huấn luyện cho các lần sau.")
+                    st.error(f"Phát hiện {len(new_pendings)} địa chỉ có vấn đề. Bạn có thể Sửa tay ngay trong bảng dưới đây, hoặc sang Tab 3 để huấn luyện cho các lần sau.")
                 else:
-                    st.success("Tuyệt vời! File đã được xử lý 100%. Nếu có lỗi lặt vặt (như số nhà viết tắt dính chùm), hãy nhấp đúp vào bảng dưới để sửa tay nhé!")
+                    st.success("Tuyệt vời! File đã được xử lý 100%. Nếu có lỗi lặt vặt, hãy nhấp đúp vào bảng dưới để sửa tay nhé!")
                     
-                st.info("💡 BẢNG KẾT QUẢ TƯƠNG TÁC: Click đúp vào ô bất kỳ để SỬA TAY trực tiếp, sau đó bấm nút Tải xuống ở dưới cùng.")
+                st.info("💡 BẢNG KẾT QUẢ TƯƠNG TÁC: Click đúp vào ô bất kỳ để SỬA TAY những địa chỉ bạn thấy chưa chuẩn, sau đó bấm nút Tải xuống.")
                 edited_df3 = st.data_editor(df_in3, use_container_width=True)
                 
                 output = io.BytesIO()
